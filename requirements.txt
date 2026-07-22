@@ -1,0 +1,4 @@
+git+https://github.com/stendeman/withings.git
+openai
+pydantic
+python-dotenv
