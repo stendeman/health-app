@@ -55,7 +55,7 @@ Required by `main.py`:
 - `OPENAI_API_KEY`
 - `WITHINGS_CLIENT_ID`
 - `WITHINGS_CLIENT_SECRET`
-- `WITHINGS_CALLBACK_URI`
+- `WITHINGS_REDIRECT_URI`
 - `SMTP_HOST`
 - `SMTP_PORT` (optional default in code is `587`)
 - `SMTP_USERNAME`
