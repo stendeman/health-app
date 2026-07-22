@@ -53,6 +53,8 @@ Small Python automation that:
 Required by `main.py`:
 
 - `OPENAI_API_KEY`
+- `WITHINGS_CLIENT_ID`
+- `WITHINGS_CLIENT_SECRET`
 - `SMTP_HOST`
 - `SMTP_PORT` (optional default in code is `587`)
 - `SMTP_USERNAME`
