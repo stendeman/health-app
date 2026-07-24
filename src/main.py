@@ -8,7 +8,6 @@ from email.message import EmailMessage
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
-from withings_client import WithingsClient
 
 from src.measurements import get_all_measurements
 
@@ -68,9 +67,7 @@ def main() -> None:
 
     load_dotenv()
 
-    client = WithingsClient()
-
-    measurements = get_all_measurements(client)
+    measurements = get_all_measurements()
 
     openai = OpenAI()
 

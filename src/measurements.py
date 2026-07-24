@@ -1,4 +1,4 @@
-from withings_client import MeasureType
+from withings_client import MeasureType, WithingsClient
 
 
 def decimal_places(value: int, unit: int) -> int:
@@ -36,7 +36,8 @@ def get_measurements(client, *meastypes):
     return thing
 
 
-def get_all_measurements(client):
+def get_all_measurements():
+    client = WithingsClient()
     return {
         'height': get_measurements(client, MeasureType.HEIGHT),
         'heart': get_measurements(client, MeasureType.HEART_PULSE),
