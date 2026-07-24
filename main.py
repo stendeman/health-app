@@ -21,63 +21,39 @@ class Email(BaseModel):
     content: str
 
 
-class Measurement(BaseModel):
-    timestamp: int
-    weight: float | None = None
-    height: float | None = None
-    fat_free_mass: float | None = None
-    fat_ratio: float | None = None
-    fat_mass_weight: float | None = None
-    diastolic_blood_pressure: float | None = None
-    systolic_blood_pressure: float | None = None
-    heart_pulse: float | None = None
-    temperature: float | None = None
-    spo2: float | None = None
-    body_temperature: float | None = None
-    skin_temperature: float | None = None
-    muscle_mass: float | None = None
-    hydration: float | None = None
-    bone_mass: float | None = None
-    pulse_wave_velocity: float | None = None
-    vo2_max: float | None = None
-    vascular_age: float | None = None
-    nerve_health_score_feet: float | None = None
-    extracellular_water: float | None = None
-    intracellular_water: float | None = None
-    visceral_fat: float | None = None
-    basal_metabolic_rate: float | None = None
-    metabolic_age: float | None = None
-    electrochemical_skin_conductance: float | None = None
+def decimal_places(value: int, unit: int) -> int:
+    if unit >= 0:
+        return 0
+
+    decimals = -unit
+    abs_value = abs(value)
+    removable = 0
+
+    while removable < decimals and abs_value != 0 and abs_value % 10 == 0:
+        abs_value //= 10
+        removable += 1
+
+    return decimals - removable
     
 
-    @staticmethod
-    def _decimal_places(value: int, unit: int) -> int:
-        if unit >= 0:
-            return 0
+def get_measurements(*meastypes):
+    json = client.get_measurements(meastypes=meastypes, category=1)
+    measurements = json['body']['measuregrps']
+    
+    thing = {'timestamp': [], **{t.name.lower(): [] for t in meastypes}}
 
-        decimals = -unit
-        abs_value = abs(value)
-        removable = 0
-
-        while removable < decimals and abs_value != 0 and abs_value % 10 == 0:
-            abs_value //= 10
-            removable += 1
-
-        return decimals - removable
-
-    @classmethod
-    def from_json(cls, timestamp, measures):
-        parsed = {'timestamp': timestamp}
-
-        for m in measures:
+    for i in measurements:
+        thing['timestamp'].append(i['created'])
+        for m in i['measures']:
             key = MeasureType(m['type']).name.lower()
             value = int(m['value'])
             unit = int(m['unit'])
-            decimals = cls._decimal_places(value, unit)
+            decimals = decimal_places(value, unit)
             scaled = value * (10 ** unit)
-            parsed[key] = round(scaled, decimals)
+            rounded = round(scaled, decimals)
+            thing[key].append(rounded)
 
-        return cls(**parsed)
+    return thing
 
 
 def send_email(email: Email) -> None:
@@ -104,20 +80,31 @@ if __name__ == '__main__':
 
     client = WithingsClient()
 
-    data = client.get_measurements(
-        meastypes=list(MeasureType),
-        category=1,
-    )['body']['measuregrps']
-
-    measurements = [Measurement.from_json(i['created'], i['measures']) for i in data]
-    measurements_json = [measurement.model_dump() for measurement in measurements]
+    measurements = {
+        'height': get_measurements(MeasureType.HEIGHT),
+        'heart': get_measurements(MeasureType.HEART_PULSE),
+        'weight': get_measurements(
+            MeasureType.BASAL_METABOLIC_RATE,
+            MeasureType.BONE_MASS,
+            MeasureType.FAT_FREE_MASS,
+            MeasureType.FAT_MASS_WEIGHT,
+            MeasureType.FAT_RATIO,
+            MeasureType.HYDRATION,
+            MeasureType.METABOLIC_AGE,
+            MeasureType.METABOLIC_AGE,
+            MeasureType.MUSCLE_MASS,
+            MeasureType.WEIGHT
+        )
+    }
 
     openai = OpenAI()
 
     response = openai.responses.parse(
         model='gpt-5.6',
-        reasoning={'effort': 'max'},
+        reasoning={'effort': 'medium'},
         background=True,
+        max_output_tokens=20_000,
+        text_format=Email,
         instructions=("""
             Generate an html email exploring the user's weight loss progress from the data.
             Especially, focus on the last 7 days. But feel free to use all data to put the more recent trends into context.
@@ -128,21 +115,20 @@ if __name__ == '__main__':
             Then, include analysis and figures to support the findings.
             Close the email with some motivational words.
 
-            Use metric system for units.
+            Use metric system for units, and Amsterdam timezone.
         """),
         input=[{
             'role': 'user',
             'content': [{
                 'type': 'input_text',
-                'text': json.dumps(measurements_json),
+                'text': json.dumps(measurements),
             }],
-        }],
-        text_format=Email
+        }]
     )
 
     deadline = time.time() + POLL_TIMEOUT_SECONDS
     while response.status in {'queued', 'in_progress'}:
-        if time.time() >= deadline:
+        if time.time() >= deadline:\
             raise TimeoutError('OpenAI background response timed out while polling for completion.')
 
         time.sleep(POLL_INTERVAL_SECONDS)
