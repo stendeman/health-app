@@ -1,19 +1,23 @@
+import argparse
 import json
 import os
 import smtplib
 import time
 from email.message import EmailMessage
 
-from pydantic import BaseModel
 from dotenv import load_dotenv
-
 from openai import OpenAI
-from withings_client import MeasureType, WithingsClient
+from pydantic import BaseModel
+from withings_client import WithingsClient
+
+from src.measurements import get_all_measurements
 
 
 DEFAULT_SMTP_PORT = 587
 POLL_INTERVAL_SECONDS = 1
 POLL_TIMEOUT_SECONDS = 600
+DEFAULT_REASONING_EFFORT = 'none'
+DEFAULT_MAX_OUTPUT_TOKENS = 5_000
 
 
 class Email(BaseModel):
@@ -21,44 +25,28 @@ class Email(BaseModel):
     content: str
 
 
-def decimal_places(value: int, unit: int) -> int:
-    if unit >= 0:
-        return 0
-
-    decimals = -unit
-    abs_value = abs(value)
-    removable = 0
-
-    while removable < decimals and abs_value != 0 and abs_value % 10 == 0:
-        abs_value //= 10
-        removable += 1
-
-    return decimals - removable
-    
-
-def get_measurements(*meastypes):
-    json = client.get_measurements(meastypes=meastypes, category=1)
-    measurements = json['body']['measuregrps']
-    
-    thing = {'timestamp': [], **{t.name.lower(): [] for t in meastypes}}
-
-    for i in measurements:
-        thing['timestamp'].append(i['created'])
-        for m in i['measures']:
-            key = MeasureType(m['type']).name.lower()
-            value = int(m['value'])
-            unit = int(m['unit'])
-            decimals = decimal_places(value, unit)
-            scaled = value * (10 ** unit)
-            rounded = round(scaled, decimals)
-            thing[key].append(rounded)
-
-    return thing
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Generate and send health progress email.')
+    parser.add_argument(
+        '--reasoning',
+        choices=['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+        default=DEFAULT_REASONING_EFFORT,
+        help='Reasoning effort for OpenAI Responses API.',
+    )
+    parser.add_argument(
+        '--maxtokens',
+        type=int,
+        default=DEFAULT_MAX_OUTPUT_TOKENS,
+        help='Maximum output tokens for OpenAI Responses API.',
+    )
+    return parser.parse_args()
 
 
 def send_email(email: Email) -> None:
     smtp_host = os.environ['SMTP_HOST']
-    smtp_port = int(os.environ['SMTP_PORT']) if 'SMTP_PORT' in os.environ else DEFAULT_SMTP_PORT
+    smtp_port = (
+        int(os.environ['SMTP_PORT']) if 'SMTP_PORT' in os.environ else DEFAULT_SMTP_PORT
+    )
     smtp_username = os.environ['SMTP_USERNAME']
     smtp_password = os.environ['SMTP_PASSWORD']
     email_from = os.environ['EMAIL_FROM'] if 'EMAIL_FROM' in os.environ else smtp_username
@@ -75,35 +63,22 @@ def send_email(email: Email) -> None:
         server.login(smtp_username, smtp_password)
         server.send_message(message)
 
-if __name__ == '__main__':
+def main() -> None:
+    args = parse_args()
+
     load_dotenv()
 
     client = WithingsClient()
 
-    measurements = {
-        'height': get_measurements(MeasureType.HEIGHT),
-        'heart': get_measurements(MeasureType.HEART_PULSE),
-        'weight': get_measurements(
-            MeasureType.BASAL_METABOLIC_RATE,
-            MeasureType.BONE_MASS,
-            MeasureType.FAT_FREE_MASS,
-            MeasureType.FAT_MASS_WEIGHT,
-            MeasureType.FAT_RATIO,
-            MeasureType.HYDRATION,
-            MeasureType.METABOLIC_AGE,
-            MeasureType.METABOLIC_AGE,
-            MeasureType.MUSCLE_MASS,
-            MeasureType.WEIGHT
-        )
-    }
+    measurements = get_all_measurements(client)
 
     openai = OpenAI()
 
     response = openai.responses.parse(
         model='gpt-5.6',
-        reasoning={'effort': 'medium'},
+        reasoning={'effort': args.reasoning},
         background=True,
-        max_output_tokens=20_000,
+        max_output_tokens=args.maxtokens,
         text_format=Email,
         instructions=("""
             Generate an html email exploring the user's weight loss progress from the data.
@@ -128,19 +103,27 @@ if __name__ == '__main__':
 
     deadline = time.time() + POLL_TIMEOUT_SECONDS
     while response.status in {'queued', 'in_progress'}:
-        if time.time() >= deadline:\
-            raise TimeoutError('OpenAI background response timed out while polling for completion.')
+        if time.time() >= deadline:
+            raise TimeoutError(
+                'OpenAI background response timed out while polling for completion.'
+            )
 
         time.sleep(POLL_INTERVAL_SECONDS)
         response = openai.responses.retrieve(response.id)
 
     if response.status != 'completed':
-        raise RuntimeError(f'OpenAI background response did not complete successfully: {response.status}')
+        raise RuntimeError(
+            f'OpenAI background response did not complete successfully: {response.status}'
+        )
 
     email = Email.model_validate_json(response.output_text)
 
     print(email.subject)
     print(email.content)
     send_email(email)
+
+
+if __name__ == '__main__':
+    main()
 
     
